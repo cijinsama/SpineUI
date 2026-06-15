@@ -21,6 +21,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _launch_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "server_name": os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
+        "share": _env_bool("GRADIO_SHARE", True),
+    }
+    server_port = os.getenv("GRADIO_SERVER_PORT")
+    if server_port:
+        kwargs["server_port"] = int(server_port)
+    return kwargs
+
+
 def convert_psd(
     psd_file: str | None,
     prompt: str,
@@ -184,8 +195,4 @@ with gr.Blocks(title="PSD to Spine") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(
-        server_name=os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
-        server_port=int(os.getenv("GRADIO_SERVER_PORT", "7860")),
-        share=_env_bool("GRADIO_SHARE", True),
-    )
+    demo.launch(**_launch_kwargs())
