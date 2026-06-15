@@ -11,8 +11,9 @@ from pathlib import Path
 from spinegen.animations import ensure_prompted_animations
 from spinegen.atlas import pack_atlas
 from spinegen.config import LLMSettings
+from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
-from spinegen.llm import build_fallback_rig, request_rig_plan, request_setup_group_choice
+from spinegen.llm import build_fallback_rig, request_redundant_layer_hides, request_rig_plan, request_setup_group_choice
 from spinegen.models import ConversionResult
 from spinegen.naming import slugify
 from spinegen.preview import iframe_for_preview, write_preview_html
@@ -67,10 +68,24 @@ def run_conversion(
         except Exception as exc:  # noqa: BLE001 - deterministic selection is good enough to continue.
             _stage(messages, stage_logger, f"LLM active group 选择失败，使用规则选择：{exc}")
     layers = selection.layers
+    layer_filter = resolve_redundant_layers(layers)
+    for message in layer_filter.messages:
+        _stage(messages, stage_logger, message)
+    if use_llm and layer_filter.candidates:
+        try:
+            _stage(messages, stage_logger, "调用 LLM 辅助判断同组冗余图层...")
+            llm_hidden_ids = request_redundant_layer_hides(prompt, layers, layer_filter.candidates, settings=settings)
+            layer_filter = resolve_redundant_layers(layers, extra_hidden_layer_ids=llm_hidden_ids)
+            if llm_hidden_ids:
+                _stage(messages, stage_logger, f"LLM 建议隐藏 {len(llm_hidden_ids)} 个冗余图层，已校验并应用。")
+        except Exception as exc:  # noqa: BLE001 - deterministic filtering is good enough to continue.
+            _stage(messages, stage_logger, f"LLM 冗余图层判断失败，使用规则过滤：{exc}")
+    layers = layer_filter.layers
     ir["selection"] = {
         "selected_group_id": selection.selected_group_id,
         "alternative_group_ids": [group.id for group in selection.alternative_groups],
         "exported_layer_count": len(layers),
+        "hidden_redundant_layer_ids": layer_filter.hidden_layer_ids,
     }
 
     _stage(messages, stage_logger, "写入 IR 元数据...")
@@ -87,7 +102,7 @@ def run_conversion(
             _stage(
                 messages,
                 stage_logger,
-                f"调用 LLM 生成 RigPlan：model={settings.model}, max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}...",
+                f"调用 LLM 生成 RigPlan：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}...",
             )
             rig = request_rig_plan(
                 skeleton_name=skeleton_name,
@@ -99,7 +114,7 @@ def run_conversion(
             _stage(
                 messages,
                 stage_logger,
-                f"LLM RigPlan 已生成：model={settings.model}, max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}。",
+                f"LLM RigPlan 已生成：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}。",
             )
         except Exception as exc:  # noqa: BLE001 - conversion should still produce deterministic files.
             rig = build_fallback_rig(

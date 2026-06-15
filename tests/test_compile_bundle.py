@@ -4,6 +4,7 @@ from PIL import Image
 
 from spinegen.atlas import pack_atlas
 from spinegen.animations import ensure_prompted_animations
+from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
 from spinegen.llm import build_fallback_rig
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
@@ -168,6 +169,35 @@ def test_slots_preserve_psd_draw_order(tmp_path: Path) -> None:
     spine_json = compile_spine_json("hero", canvas, layers, rig)
 
     assert [slot["attachment"] for slot in spine_json["slots"]] == ["face", "eye"]
+
+
+def test_redundant_layer_filter_hides_component_layer(tmp_path: Path) -> None:
+    image_path = tmp_path / "part.png"
+    Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
+    layers = [
+        _layer("pose/hand_hold_weapon", "hand_hold_weapon", image_path, 0, (10, 10, 90, 120)),
+        _layer("pose/weapon", "weapon", image_path, 1, (10, 10, 90, 120)),
+        _layer("pose/face", "face", image_path, 2, (35, 20, 65, 70)),
+    ]
+
+    result = resolve_redundant_layers(layers)
+
+    assert result.hidden_layer_ids == ["layer_1"]
+    assert [layer.asset_name for layer in result.layers] == ["hand_hold_weapon", "face"]
+
+
+def test_redundant_layer_filter_keeps_nested_distinct_parts(tmp_path: Path) -> None:
+    image_path = tmp_path / "part.png"
+    Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
+    layers = [
+        _layer("pose/face", "face", image_path, 0, (20, 20, 80, 80)),
+        _layer("pose/eye", "eye", image_path, 1, (35, 35, 65, 45)),
+    ]
+
+    result = resolve_redundant_layers(layers)
+
+    assert result.hidden_layer_ids == []
+    assert [layer.asset_name for layer in result.layers] == ["face", "eye"]
 
 
 def _layer(

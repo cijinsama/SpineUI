@@ -42,7 +42,6 @@ def _launch_kwargs() -> dict[str, object]:
 def convert_psd(
     psd_file: str | None,
     prompt: str,
-    model: str,
     use_llm: bool,
     atlas_width: int,
     max_tokens: int,
@@ -71,7 +70,7 @@ def convert_psd(
         try:
             env_settings = LLMSettings.from_env()
             llm_settings = LLMSettings(
-                model=model.strip() or env_settings.model,
+                model=env_settings.model,
                 max_tokens=int(max_tokens),
                 temperature=float(temperature),
                 top_p=float(top_p),
@@ -139,13 +138,6 @@ with gr.Blocks(title="PSD to Spine") as demo:
                 placeholder="例如：这是一个 Q 版骑士角色，生成 idle / walk / attack 的基础骨骼和轻微待机动画。",
             )
             with gr.Row():
-                model_input = gr.Dropdown(
-                    label="NRP model",
-                    value=LLMSettings.from_env().model,
-                    choices=["qwen3", "gpt-oss", "kimi", "glm-5", "minimax-m2", "glm-4.7", "llama3-sdsc"],
-                    allow_custom_value=True,
-                    scale=2,
-                )
                 atlas_width_input = gr.Dropdown(
                     label="Atlas width",
                     value=2048,
@@ -204,7 +196,6 @@ with gr.Blocks(title="PSD to Spine") as demo:
         inputs=[
             psd_input,
             prompt_input,
-            model_input,
             use_llm_input,
             atlas_width_input,
             max_tokens_input,

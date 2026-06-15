@@ -12,6 +12,7 @@ from openai import OpenAIError
 
 from spinegen.config import DEFAULT_BASE_URL, LLMSettings
 from spinegen.layer_selection import group_summaries
+from spinegen.layer_filter import RedundantLayerCandidate, redundant_candidate_summaries
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.naming import slugify, unique_name
 
@@ -196,6 +197,67 @@ def request_setup_group_choice(
     parsed = _parse_json_object(completion.choices[0].message.content or "{}")
     selected = parsed.get("selected_group_id")
     return str(selected) if selected else None
+
+
+def request_redundant_layer_hides(
+    prompt: str,
+    layers: list[LayerArtifact],
+    candidates: list[RedundantLayerCandidate],
+    settings: LLMSettings | None = None,
+) -> set[str]:
+    if not candidates:
+        return set()
+
+    load_dotenv()
+    settings = settings or LLMSettings.from_env()
+    api_key = os.getenv("NRP_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("缺少 NRP_API_KEY 或 OPENAI_API_KEY。请在 .env 中配置。")
+
+    base_url = os.getenv("NRP_BASE_URL", DEFAULT_BASE_URL)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.timeout_seconds)
+    candidate_summaries = redundant_candidate_summaries(candidates, layers)
+    allowed_ids = {summary["hide_layer_id"] for summary in candidate_summaries}
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You choose redundant PSD layers to hide before creating Spine slots. "
+                "The candidates are possible component/composite duplicates from the same active pose group. "
+                "Return only JSON: {\"hide_layer_ids\": [string], \"reason\": string}. "
+                "Only choose hide_layer_id values from the candidates. Keep enough layers for a complete character."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "prompt": prompt,
+                    "candidates": candidate_summaries,
+                    "rules": [
+                        "If one layer is a composite that already contains another component layer, hide the component layer.",
+                        "Do not hide both layers in a candidate pair.",
+                        "Return an empty list if no candidate is genuinely redundant.",
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    kwargs: dict[str, Any] = {
+        "model": settings.model,
+        "messages": messages,
+        "max_tokens": min(settings.max_tokens, 2048),
+        "temperature": 0.0,
+        "top_p": settings.top_p,
+        "response_format": {"type": "json_object"},
+    }
+    completion = _create_chat_completion(client, kwargs)
+    parsed = _parse_json_object(completion.choices[0].message.content or "{}")
+    raw_ids = parsed.get("hide_layer_ids")
+    if not isinstance(raw_ids, list):
+        return set()
+    return {str(layer_id) for layer_id in raw_ids if str(layer_id) in allowed_ids}
 
 
 def _create_chat_completion(client: OpenAI, kwargs: dict[str, Any]) -> Any:

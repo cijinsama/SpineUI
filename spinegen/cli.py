@@ -16,7 +16,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Convert PSD/PSB layers to a Spine JSON + atlas bundle.")
     parser.add_argument("psd", type=Path, help="Input .psd or .psb file")
     parser.add_argument("--prompt", default="", help="Prompt for LLM RigPlan generation")
-    parser.add_argument("--model", default=None, help="NRP model id")
+    parser.add_argument("--model", default=None, help="LLM model id")
     parser.add_argument("--no-llm", action="store_true", help="Skip LLM and use deterministic fallback rig")
     parser.add_argument("--atlas-width", type=int, default=2048, help="Maximum atlas shelf width")
     parser.add_argument("--max-tokens", type=int, default=None, help="LLM max_tokens")
