@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
+from queue import Queue
+from threading import Thread
+from typing import Any, Iterator
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -12,6 +16,9 @@ from spinegen.pipeline import run_conversion
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
+ConvertOutput = tuple[str, str, str | None, list[str], str, str]
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -43,9 +50,9 @@ def convert_psd(
     top_p: float,
     enable_thinking: bool,
     preserve_thinking: bool,
-) -> tuple[str, str, str | None, list[str], str, str]:
+) -> Iterator[ConvertOutput]:
     if not psd_file:
-        return (
+        yield (
             "请先上传 PSD 或 PSB 文件。",
             "",
             None,
@@ -53,45 +60,68 @@ def convert_psd(
             "",
             "",
         )
+        return
 
-    try:
-        llm_settings = LLMSettings(
-            model=model.strip() or LLMSettings.from_env().model,
-            max_tokens=int(max_tokens),
-            temperature=float(temperature),
-            top_p=float(top_p),
-            enable_thinking=bool(enable_thinking),
-            preserve_thinking=bool(preserve_thinking),
-            timeout_seconds=LLMSettings.from_env().timeout_seconds,
-        )
-        result = run_conversion(
-            psd_path=Path(psd_file),
-            prompt=prompt or "",
-            llm_settings=llm_settings,
-            use_llm=use_llm,
-            atlas_width=int(atlas_width),
-        )
-    except Exception as exc:  # noqa: BLE001 - surface conversion failures in Gradio.
-        return (
-            f"生成失败：{exc}",
-            "",
-            None,
-            [],
-            "",
-            "",
-        )
+    events: Queue[tuple[str, Any]] = Queue()
 
-    status = "\n".join(result.messages)
-    json_preview = json.dumps(result.spine_json, ensure_ascii=False, indent=2)
-    rig_preview = json.dumps(result.rig_plan, ensure_ascii=False, indent=2)
-    return (
-        status,
-        result.preview_iframe_html,
-        str(result.zip_path),
-        [str(path) for path in result.download_files],
-        json_preview,
-        rig_preview,
-    )
+    def stage_logger(message: str) -> None:
+        events.put(("stage", message))
+
+    def worker() -> None:
+        try:
+            env_settings = LLMSettings.from_env()
+            llm_settings = LLMSettings(
+                model=model.strip() or env_settings.model,
+                max_tokens=int(max_tokens),
+                temperature=float(temperature),
+                top_p=float(top_p),
+                enable_thinking=bool(enable_thinking),
+                preserve_thinking=bool(preserve_thinking),
+                timeout_seconds=env_settings.timeout_seconds,
+            )
+            result = run_conversion(
+                psd_path=Path(psd_file),
+                prompt=prompt or "",
+                llm_settings=llm_settings,
+                use_llm=use_llm,
+                atlas_width=int(atlas_width),
+                stage_logger=stage_logger,
+            )
+            events.put(("result", result))
+        except Exception as exc:  # noqa: BLE001 - surface conversion failures in Gradio.
+            logger.exception("PSD to Spine conversion failed")
+            events.put(("error", exc))
+
+    Thread(target=worker, daemon=True).start()
+
+    log_lines: list[str] = []
+    while True:
+        event_type, payload = events.get()
+        if event_type == "stage":
+            log_lines.append(str(payload))
+            yield _empty_output("\n".join(log_lines))
+        elif event_type == "error":
+            log_lines.append(f"生成失败：{payload}")
+            yield _empty_output("\n".join(log_lines))
+            return
+        elif event_type == "result":
+            result = payload
+            status = "\n".join(result.messages)
+            json_preview = json.dumps(result.spine_json, ensure_ascii=False, indent=2)
+            rig_preview = json.dumps(result.rig_plan, ensure_ascii=False, indent=2)
+            yield (
+                status,
+                result.preview_iframe_html,
+                str(result.zip_path),
+                [str(path) for path in result.download_files],
+                json_preview,
+                rig_preview,
+            )
+            return
+
+
+def _empty_output(status: str) -> ConvertOutput:
+    return (status, "", None, [], "", "")
 
 
 with gr.Blocks(title="PSD to Spine") as demo:
@@ -195,4 +225,5 @@ with gr.Blocks(title="PSD to Spine") as demo:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     demo.launch(**_launch_kwargs())

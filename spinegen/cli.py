@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,6 +11,7 @@ from spinegen.pipeline import run_conversion
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     load_dotenv()
     parser = argparse.ArgumentParser(description="Convert PSD/PSB layers to a Spine JSON + atlas bundle.")
     parser.add_argument("psd", type=Path, help="Input .psd or .psb file")
@@ -42,10 +44,8 @@ def main() -> None:
         use_llm=not args.no_llm,
         atlas_width=args.atlas_width,
     )
-    print("\n".join(result.messages))
     print(result.zip_path.resolve())
 
 
 if __name__ == "__main__":
     main()
-
