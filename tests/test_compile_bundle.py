@@ -8,6 +8,7 @@ from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
 from spinegen.llm import build_fallback_rig
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
+from spinegen.prompts import DEFAULT_USER_PROMPT, compose_effective_prompt
 from spinegen.spine_json import compile_spine_json
 from spinegen.validate import validate_spine_bundle
 
@@ -171,19 +172,19 @@ def test_slots_preserve_psd_draw_order(tmp_path: Path) -> None:
     assert [slot["attachment"] for slot in spine_json["slots"]] == ["face", "eye"]
 
 
-def test_redundant_layer_filter_hides_component_layer(tmp_path: Path) -> None:
+def test_layer_filter_applies_validated_llm_hidden_ids(tmp_path: Path) -> None:
     image_path = tmp_path / "part.png"
     Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
     layers = [
-        _layer("pose/hand_hold_weapon", "hand_hold_weapon", image_path, 0, (10, 10, 90, 120)),
-        _layer("pose/weapon", "weapon", image_path, 1, (10, 10, 90, 120)),
+        _layer("pose/composite_part", "composite_part", image_path, 0, (10, 10, 90, 120)),
+        _layer("pose/component_part", "component_part", image_path, 1, (10, 10, 90, 120)),
         _layer("pose/face", "face", image_path, 2, (35, 20, 65, 70)),
     ]
 
-    result = resolve_redundant_layers(layers)
+    result = resolve_redundant_layers(layers, hidden_layer_ids={"layer_1", "not_real"})
 
     assert result.hidden_layer_ids == ["layer_1"]
-    assert [layer.asset_name for layer in result.layers] == ["hand_hold_weapon", "face"]
+    assert [layer.asset_name for layer in result.layers] == ["composite_part", "face"]
 
 
 def test_redundant_layer_filter_keeps_nested_distinct_parts(tmp_path: Path) -> None:
@@ -198,6 +199,13 @@ def test_redundant_layer_filter_keeps_nested_distinct_parts(tmp_path: Path) -> N
 
     assert result.hidden_layer_ids == []
     assert [layer.asset_name for layer in result.layers] == ["face", "eye"]
+
+
+def test_user_prompt_is_composed_with_default_quality_prompt() -> None:
+    prompt = compose_effective_prompt("生成 attack 的基础骨骼和动画。")
+
+    assert DEFAULT_USER_PROMPT in prompt
+    assert "用户需求：生成 attack 的基础骨骼和动画。" in prompt
 
 
 def _layer(

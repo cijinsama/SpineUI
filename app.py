@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from spinegen.config import LLMSettings
 from spinegen.pipeline import run_conversion
+from spinegen.prompts import DEFAULT_USER_PROMPT
 
 
 load_dotenv()
@@ -135,7 +136,8 @@ with gr.Blocks(title="PSD to Spine") as demo:
             prompt_input = gr.Textbox(
                 label="Prompt",
                 lines=7,
-                placeholder="例如：这是一个 Q 版骑士角色，生成 idle / walk / attack 的基础骨骼和轻微待机动画。",
+                value=DEFAULT_USER_PROMPT,
+                placeholder=DEFAULT_USER_PROMPT,
             )
             with gr.Row():
                 atlas_width_input = gr.Dropdown(
@@ -144,7 +146,7 @@ with gr.Blocks(title="PSD to Spine") as demo:
                     choices=[512, 1024, 2048, 4096],
                     scale=1,
                 )
-            use_llm_input = gr.Checkbox(label="Use LLM RigPlan", value=True)
+            use_llm_input = gr.Checkbox(label="Use LLM planning", value=True)
             with gr.Accordion("LLM parameters", open=False):
                 max_tokens_input = gr.Slider(
                     label="max_tokens",

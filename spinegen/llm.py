@@ -11,10 +11,15 @@ from openai import OpenAI
 from openai import OpenAIError
 
 from spinegen.config import DEFAULT_BASE_URL, LLMSettings
+from spinegen.layer_filter import (
+    layer_summaries,
+    find_layer_overlap_hints,
+    layer_overlap_hint_summaries,
+)
 from spinegen.layer_selection import group_summaries
-from spinegen.layer_filter import RedundantLayerCandidate, redundant_candidate_summaries
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.naming import slugify, unique_name
+from spinegen.prompts import LAYER_VISIBILITY_SYSTEM_PROMPT, RIG_SYSTEM_PROMPT, SETUP_GROUP_SYSTEM_PROMPT
 
 
 def build_fallback_rig(
@@ -77,15 +82,7 @@ def request_rig_plan(
     messages = [
         {
             "role": "system",
-            "content": (
-                "You create constrained RigPlan JSON for a PSD-to-Spine compiler. "
-                "Return only valid JSON. Do not invent layer_id values. "
-                "Use existing layer_id values exactly. Keep coordinates out unless they are simple pivots. "
-                "Schema: {skeleton_name:string,bones:[{name:string,parent:string|null,pivot_layer_id:string|null}],"
-                "slots:[{name:string,bone:string,layer_id:string,attachment:string}],"
-                "animations:[{name:string,duration:number,bone_timelines:[{bone:string,rotate?:[{time:number,angle:number}],"
-                "translate?:[{time:number,x:number,y:number}],scale?:[{time:number,x:number,y:number}]}]}],notes:[string]}."
-            ),
+            "content": RIG_SYSTEM_PROMPT,
         },
         {
             "role": "user",
@@ -100,14 +97,16 @@ def request_rig_plan(
                         "origin": [canvas.origin_x, canvas.origin_y],
                     },
                     "layers_bottom_to_top": layer_summary,
-                    "rules": [
+                    "constraints": [
                         "Every slot must reference an existing layer_id.",
                         "Every slot bone must exist in bones.",
-                        "Prefer root/body/head/limb semantic bones when layer names imply them.",
                         "If unsure, bind the layer to root or a simple part bone.",
-                        "Keep animations subtle and short. Use rotate timelines first.",
                         "Use only ASCII names in bones, slots, and animations.",
                         "Do not include comments, markdown, or explanatory text outside the JSON object.",
+                    ],
+                    "guidance": [
+                        "Use the user prompt to decide which animations to create.",
+                        "Prefer readable motion that works with the available separated layers.",
                     ],
                 },
                 ensure_ascii=False,
@@ -162,12 +161,7 @@ def request_setup_group_choice(
     messages = [
         {
             "role": "system",
-            "content": (
-                "You select one active setup group from PSD top-level groups. "
-                "The groups may be mutually exclusive pose or variant groups. "
-                "Return only JSON: {\"selected_group_id\": string|null, \"reason\": string}. "
-                "Use only ids from the provided group list. If the groups are not alternatives, return null."
-            ),
+            "content": SETUP_GROUP_SYSTEM_PROMPT,
         },
         {
             "role": "user",
@@ -175,8 +169,10 @@ def request_setup_group_choice(
                 {
                     "prompt": prompt,
                     "groups": group_summaries(groups),
-                    "rules": [
+                    "constraints": [
                         "Do not invent group ids.",
+                    ],
+                    "guidance": [
                         "Prefer the group whose label or layer parts match the requested action or pose.",
                         "If the prompt does not indicate a pose, choose the most neutral setup group.",
                     ],
@@ -199,13 +195,12 @@ def request_setup_group_choice(
     return str(selected) if selected else None
 
 
-def request_redundant_layer_hides(
+def request_layer_visibility_plan(
     prompt: str,
     layers: list[LayerArtifact],
-    candidates: list[RedundantLayerCandidate],
     settings: LLMSettings | None = None,
 ) -> set[str]:
-    if not candidates:
+    if not layers:
         return set()
 
     load_dotenv()
@@ -216,28 +211,27 @@ def request_redundant_layer_hides(
 
     base_url = os.getenv("NRP_BASE_URL", DEFAULT_BASE_URL)
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.timeout_seconds)
-    candidate_summaries = redundant_candidate_summaries(candidates, layers)
-    allowed_ids = {summary["hide_layer_id"] for summary in candidate_summaries}
+    overlap_hints = find_layer_overlap_hints(layers)
+    active_layer_summaries = layer_summaries(layers)
+    allowed_ids = {summary["id"] for summary in active_layer_summaries}
     messages = [
         {
             "role": "system",
-            "content": (
-                "You choose redundant PSD layers to hide before creating Spine slots. "
-                "The candidates are possible component/composite duplicates from the same active pose group. "
-                "Return only JSON: {\"hide_layer_ids\": [string], \"reason\": string}. "
-                "Only choose hide_layer_id values from the candidates. Keep enough layers for a complete character."
-            ),
+            "content": LAYER_VISIBILITY_SYSTEM_PROMPT,
         },
         {
             "role": "user",
             "content": json.dumps(
                 {
                     "prompt": prompt,
-                    "candidates": candidate_summaries,
-                    "rules": [
-                        "If one layer is a composite that already contains another component layer, hide the component layer.",
-                        "Do not hide both layers in a candidate pair.",
-                        "Return an empty list if no candidate is genuinely redundant.",
+                    "active_layers": active_layer_summaries,
+                    "geometry_hints": layer_overlap_hint_summaries(overlap_hints, layers),
+                    "validation": [
+                        "hide_layer_ids must be a subset of active_layers[].id.",
+                        "Do not hide all layers.",
+                        "geometry_hints are unordered pairs, not hide/keep recommendations.",
+                        "Do not hide every plausible layer for a required body part, facial feature, or held/equipped object relationship.",
+                        "Make the final visibility decision from the prompt and layer metadata.",
                     ],
                 },
                 ensure_ascii=False,
@@ -257,7 +251,10 @@ def request_redundant_layer_hides(
     raw_ids = parsed.get("hide_layer_ids")
     if not isinstance(raw_ids, list):
         return set()
-    return {str(layer_id) for layer_id in raw_ids if str(layer_id) in allowed_ids}
+    selected = {str(layer_id) for layer_id in raw_ids if str(layer_id) in allowed_ids}
+    if len(selected) >= len(layers):
+        return set()
+    return selected
 
 
 def _create_chat_completion(client: OpenAI, kwargs: dict[str, Any]) -> Any:

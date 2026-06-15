@@ -54,7 +54,7 @@ python -m spinegen.cli character.psd \
   --max-tokens 16000
 ```
 
-Use `--no-llm` for deterministic PSD to setup-pose JSON output.
+Use `--no-llm` for an offline fallback setup-pose JSON output.
 
 ## PSD Layer Tags
 
@@ -68,6 +68,12 @@ The compiler never lets the LLM invent coordinates or atlas entries. It only acc
 
 ## Pose Groups
 
-If a PSD contains multiple top-level groups that look like mutually exclusive full-character poses or variants, the app selects one active setup group before atlas packing. The selection is based on group structure, overlapping bounds, reusable part names, and prompt tokens. When LLM mode is enabled, the LLM can choose among the detected candidate groups, but code validates the returned group id before using it.
+If a PSD contains multiple top-level groups that look like mutually exclusive full-character poses or variants, the app detects candidate groups before atlas packing. When LLM mode is enabled, the LLM chooses among those detected groups from the user prompt; code only validates the returned group id before using it. If the LLM is disabled or unavailable, the app uses a conservative fallback group choice.
 
 This prevents multiple complete poses from being displayed at the same time while avoiding hardcoded project-specific group names.
+
+## LLM Visibility Planning
+
+After the active group is selected, the app asks the configured LLM backend to produce a visibility plan for the active layers. The model can hide mutually exclusive layers, composite/component duplicates, optional equipment states, and expression variants according to the user prompt. The compiler only applies layer ids that exist in the active layer set, and it rejects plans that would hide every layer.
+
+The app always includes a default quality prompt that prioritizes one clean readable character, no duplicate hands/weapons, visible facial features, and a basic rig/animation plan. User text is appended as the explicit request and can override those defaults when it asks for a specific state.

@@ -8,9 +8,9 @@ from spinegen.naming import slugify
 
 
 @dataclass(frozen=True)
-class RedundantLayerCandidate:
-    hide_layer_id: str
-    keep_layer_id: str
+class LayerOverlapHint:
+    first_layer_id: str
+    second_layer_id: str
     reason: str
     overlap: float
     area_ratio: float
@@ -20,65 +20,70 @@ class RedundantLayerCandidate:
 class LayerFilterResult:
     layers: list[LayerArtifact]
     hidden_layer_ids: list[str]
-    candidates: list[RedundantLayerCandidate]
+    overlap_hints: list[LayerOverlapHint]
     messages: list[str]
 
 
 def resolve_redundant_layers(
     layers: list[LayerArtifact],
-    extra_hidden_layer_ids: set[str] | None = None,
+    hidden_layer_ids: set[str] | None = None,
 ) -> LayerFilterResult:
-    candidates = find_redundant_layer_candidates(layers)
-    hidden_ids = {candidate.hide_layer_id for candidate in candidates}
-    if extra_hidden_layer_ids:
-        valid_ids = {layer.id for layer in layers}
-        hidden_ids.update(layer_id for layer_id in extra_hidden_layer_ids if layer_id in valid_ids)
+    overlap_hints = find_layer_overlap_hints(layers)
+    valid_ids = {layer.id for layer in layers}
+    hidden_ids = {layer_id for layer_id in hidden_layer_ids or set() if layer_id in valid_ids}
 
     filtered_layers = [layer for layer in layers if layer.id not in hidden_ids]
     messages: list[str] = []
     if hidden_ids:
-        messages.append(f"检测到同组内冗余/组合图层，隐藏 {len(hidden_ids)} 个图层。")
+        messages.append(f"LLM 可见性计划隐藏 {len(hidden_ids)} 个图层。")
     return LayerFilterResult(
         layers=filtered_layers,
         hidden_layer_ids=sorted(hidden_ids),
-        candidates=candidates,
+        overlap_hints=overlap_hints,
         messages=messages,
     )
 
 
-def find_redundant_layer_candidates(layers: list[LayerArtifact]) -> list[RedundantLayerCandidate]:
-    candidates: dict[str, RedundantLayerCandidate] = {}
+def find_layer_overlap_hints(layers: list[LayerArtifact]) -> list[LayerOverlapHint]:
+    hints: dict[tuple[str, str], LayerOverlapHint] = {}
     for index, left in enumerate(layers):
         for right in layers[index + 1 :]:
-            candidate = _candidate_for_pair(left, right)
-            if candidate is not None:
-                candidates[candidate.hide_layer_id] = candidate
-    return sorted(candidates.values(), key=lambda candidate: candidate.hide_layer_id)
+            hint = _overlap_hint_for_pair(left, right)
+            if hint is not None:
+                hints[(hint.first_layer_id, hint.second_layer_id)] = hint
+    return sorted(hints.values(), key=lambda hint: (hint.first_layer_id, hint.second_layer_id))
 
 
-def redundant_candidate_summaries(candidates: list[RedundantLayerCandidate], layers: list[LayerArtifact]) -> list[dict[str, Any]]:
+def layer_summaries(layers: list[LayerArtifact]) -> list[dict[str, Any]]:
+    return [_layer_summary(layer) for layer in layers]
+
+
+def layer_overlap_hint_summaries(hints: list[LayerOverlapHint], layers: list[LayerArtifact]) -> list[dict[str, Any]]:
     layer_by_id = {layer.id: layer for layer in layers}
     summaries: list[dict[str, Any]] = []
-    for candidate in candidates:
-        hidden = layer_by_id.get(candidate.hide_layer_id)
-        kept = layer_by_id.get(candidate.keep_layer_id)
-        if hidden is None or kept is None:
+    for hint in hints:
+        first = layer_by_id.get(hint.first_layer_id)
+        second = layer_by_id.get(hint.second_layer_id)
+        if first is None or second is None:
             continue
+        first_tokens = _semantic_tokens(first)
+        second_tokens = _semantic_tokens(second)
         summaries.append(
             {
-                "hide_layer_id": candidate.hide_layer_id,
-                "keep_layer_id": candidate.keep_layer_id,
-                "reason": candidate.reason,
-                "overlap": round(candidate.overlap, 4),
-                "area_ratio": round(candidate.area_ratio, 4),
-                "hide_layer": _layer_summary(hidden),
-                "keep_layer": _layer_summary(kept),
+                "layer_ids": [hint.first_layer_id, hint.second_layer_id],
+                "reason": hint.reason,
+                "overlap": round(hint.overlap, 4),
+                "area_ratio": round(hint.area_ratio, 4),
+                "shared_tokens": sorted(first_tokens & second_tokens),
+                "different_tokens": sorted(first_tokens ^ second_tokens),
+                "token_relation": _token_relation(first_tokens, second_tokens),
+                "layers": [_layer_summary(first), _layer_summary(second)],
             }
         )
     return summaries
 
 
-def _candidate_for_pair(left: LayerArtifact, right: LayerArtifact) -> RedundantLayerCandidate | None:
+def _overlap_hint_for_pair(left: LayerArtifact, right: LayerArtifact) -> LayerOverlapHint | None:
     overlap = _bbox_overlap(left.bbox, right.bbox)
     area_ratio = _area_ratio(left.bbox, right.bbox)
     if overlap < 0.9 or area_ratio < 0.8:
@@ -89,23 +94,16 @@ def _candidate_for_pair(left: LayerArtifact, right: LayerArtifact) -> RedundantL
     if not left_tokens or not right_tokens:
         return None
 
-    if right_tokens < left_tokens:
-        return RedundantLayerCandidate(
-            hide_layer_id=right.id,
-            keep_layer_id=left.id,
-            reason="component layer tokens are contained in a larger composite layer with matching bounds",
-            overlap=overlap,
-            area_ratio=area_ratio,
-        )
-    if left_tokens < right_tokens:
-        return RedundantLayerCandidate(
-            hide_layer_id=left.id,
-            keep_layer_id=right.id,
-            reason="component layer tokens are contained in a larger composite layer with matching bounds",
-            overlap=overlap,
-            area_ratio=area_ratio,
-        )
-    return None
+    if not (left_tokens & right_tokens or left_tokens < right_tokens or right_tokens < left_tokens):
+        return None
+
+    return LayerOverlapHint(
+        first_layer_id=left.id,
+        second_layer_id=right.id,
+        reason="highly overlapping bounds with related layer names",
+        overlap=overlap,
+        area_ratio=area_ratio,
+    )
 
 
 def _layer_summary(layer: LayerArtifact) -> dict[str, Any]:
@@ -137,10 +135,6 @@ def _semantic_tokens(layer: LayerArtifact) -> set[str]:
             "layer",
             "left",
             "right",
-            "attack",
-            "idle",
-            "walk",
-            "run",
         }
     }
 
@@ -148,6 +142,18 @@ def _semantic_tokens(layer: LayerArtifact) -> set[str]:
 def _tokens(value: str) -> set[str]:
     slug = slugify(value.replace("/", "_").replace("-", "_"), fallback="")
     return {token for token in slug.lower().split("_") if len(token) >= 2}
+
+
+def _token_relation(first_tokens: set[str], second_tokens: set[str]) -> str:
+    if first_tokens < second_tokens:
+        return "first_tokens_subset_of_second"
+    if second_tokens < first_tokens:
+        return "second_tokens_subset_of_first"
+    if first_tokens == second_tokens:
+        return "same_tokens"
+    if first_tokens & second_tokens:
+        return "partial_overlap"
+    return "different_tokens"
 
 
 def _bbox_area(bbox: tuple[int, int, int, int]) -> int:
@@ -173,4 +179,3 @@ def _area_ratio(left: tuple[int, int, int, int], right: tuple[int, int, int, int
     if larger <= 0:
         return 0.0
     return min(left_area, right_area) / larger
-
