@@ -8,7 +8,7 @@ from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
 from spinegen.llm import build_fallback_rig
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
-from spinegen.prompts import DEFAULT_USER_PROMPT, compose_effective_prompt
+from spinegen.prompts import DEFAULT_QUALITY_PROMPT, build_prompt_context
 from spinegen.spine_json import compile_spine_json
 from spinegen.validate import validate_spine_bundle
 
@@ -201,11 +201,19 @@ def test_redundant_layer_filter_keeps_nested_distinct_parts(tmp_path: Path) -> N
     assert [layer.asset_name for layer in result.layers] == ["face", "eye"]
 
 
-def test_user_prompt_is_composed_with_default_quality_prompt() -> None:
-    prompt = compose_effective_prompt("生成 attack 的基础骨骼和动画。")
+def test_prompt_context_keeps_user_prompt_separate_from_hidden_quality_prompt() -> None:
+    context = build_prompt_context("生成 attack 的基础骨骼和动画。")
 
-    assert DEFAULT_USER_PROMPT in prompt
-    assert "用户需求：生成 attack 的基础骨骼和动画。" in prompt
+    assert context.user_prompt == "生成 attack 的基础骨骼和动画。"
+    assert context.quality_prompt == DEFAULT_QUALITY_PROMPT
+    assert context.visibility_payload()["user_prompt"] == "生成 attack 的基础骨骼和动画。"
+    assert context.visibility_payload()["hidden_quality_prompt"] == DEFAULT_QUALITY_PROMPT
+
+
+def test_old_visible_default_prompt_is_not_treated_as_user_request() -> None:
+    context = build_prompt_context(DEFAULT_QUALITY_PROMPT)
+
+    assert context.user_prompt == ""
 
 
 def _layer(

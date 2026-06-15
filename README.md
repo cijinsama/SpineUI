@@ -76,4 +76,12 @@ This prevents multiple complete poses from being displayed at the same time whil
 
 After the active group is selected, the app asks the configured LLM backend to produce a visibility plan for the active layers. The model can hide mutually exclusive layers, composite/component duplicates, optional equipment states, and expression variants according to the user prompt. The compiler only applies layer ids that exist in the active layer set, and it rejects plans that would hide every layer.
 
-The app always includes a default quality prompt that prioritizes one clean readable character, no duplicate hands/weapons, visible facial features, and a basic rig/animation plan. User text is appended as the explicit request and can override those defaults when it asks for a specific state.
+The Gradio `User prompt` field and the CLI `--prompt` flag are only for the user's request, for example `这是一个 Q 版角色，生成 attack 的基础骨骼和动画。`. The hidden default quality prompt is added in backend code and is not shown in the app.
+
+Prompt routing is split by LLM task:
+
+- Setup group choice: `SETUP_GROUP_SYSTEM_PROMPT` plus the user request, hidden quality prompt, and candidate group summaries.
+- Layer visibility planning: `LAYER_VISIBILITY_SYSTEM_PROMPT` plus the user request, hidden quality prompt, active layer metadata, and unordered overlap hints.
+- Rig and animation generation: `RIG_SYSTEM_PROMPT` plus the user request, hidden quality prompt, canvas metadata, active layers, and RigPlan schema constraints.
+
+User text is treated as the explicit request and can override the hidden quality defaults when it asks for a specific state.

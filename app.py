@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from spinegen.config import LLMSettings
 from spinegen.pipeline import run_conversion
-from spinegen.prompts import DEFAULT_USER_PROMPT
+from spinegen.prompts import USER_PROMPT_PLACEHOLDER
 
 
 load_dotenv()
@@ -134,10 +134,9 @@ with gr.Blocks(title="PSD to Spine") as demo:
                 type="filepath",
             )
             prompt_input = gr.Textbox(
-                label="Prompt",
+                label="User prompt",
                 lines=7,
-                value=DEFAULT_USER_PROMPT,
-                placeholder=DEFAULT_USER_PROMPT,
+                placeholder=USER_PROMPT_PLACEHOLDER,
             )
             with gr.Row():
                 atlas_width_input = gr.Dropdown(

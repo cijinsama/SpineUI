@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 
-DEFAULT_USER_PROMPT = (
+
+DEFAULT_QUALITY_PROMPT = (
     "请把 PSD 图层转换成一个干净的 Spine setup pose，并根据素材和用户意图生成基础骨骼与动画。"
     "如果同一姿势里存在互斥图层、组合图层与拆分图层、可选表情或装备状态，请只保留最适合当前意图的一套可见图层。"
     "优先保证预览中角色不重影、不多手、不多武器，脸部五官和主要肢体可见。"
@@ -10,11 +12,45 @@ DEFAULT_USER_PROMPT = (
 )
 
 
-def compose_effective_prompt(user_prompt: str) -> str:
-    stripped = user_prompt.strip()
-    if not stripped or stripped == DEFAULT_USER_PROMPT:
-        return DEFAULT_USER_PROMPT
-    return f"{DEFAULT_USER_PROMPT}\n\n用户需求：{stripped}"
+USER_PROMPT_PLACEHOLDER = "例如：这是一个 Q 版角色，生成 attack 的基础骨骼和动画。"
+
+
+@dataclass(frozen=True)
+class PromptContext:
+    user_prompt: str
+    quality_prompt: str = DEFAULT_QUALITY_PROMPT
+
+    @property
+    def user_intent(self) -> str:
+        return self.user_prompt or "用户未填写具体需求；请根据 PSD 素材自动选择清晰、完整的默认表现。"
+
+    def setup_group_payload(self) -> dict[str, str]:
+        return {
+            "user_prompt": self.user_intent,
+            "hidden_quality_prompt": self.quality_prompt,
+            "task_prompt": "选择一个最适合作为 Spine setup pose 的 active top-level group。",
+        }
+
+    def visibility_payload(self) -> dict[str, str]:
+        return {
+            "user_prompt": self.user_intent,
+            "hidden_quality_prompt": self.quality_prompt,
+            "task_prompt": "决定 active group 中哪些 PSD 图层应该隐藏，输出 hide_layer_ids。",
+        }
+
+    def rig_payload(self) -> dict[str, str]:
+        return {
+            "user_prompt": self.user_intent,
+            "hidden_quality_prompt": self.quality_prompt,
+            "task_prompt": "生成 Spine RigPlan，包括 bones、slots 和 animations。",
+        }
+
+
+def build_prompt_context(user_prompt: str) -> PromptContext:
+    stripped = (user_prompt or "").strip()
+    if stripped == DEFAULT_QUALITY_PROMPT:
+        stripped = ""
+    return PromptContext(user_prompt=stripped)
 
 
 LAYER_VISIBILITY_SYSTEM_PROMPT = (

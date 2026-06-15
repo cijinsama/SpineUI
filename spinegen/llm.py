@@ -19,7 +19,12 @@ from spinegen.layer_filter import (
 from spinegen.layer_selection import group_summaries
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.naming import slugify, unique_name
-from spinegen.prompts import LAYER_VISIBILITY_SYSTEM_PROMPT, RIG_SYSTEM_PROMPT, SETUP_GROUP_SYSTEM_PROMPT
+from spinegen.prompts import (
+    LAYER_VISIBILITY_SYSTEM_PROMPT,
+    PromptContext,
+    RIG_SYSTEM_PROMPT,
+    SETUP_GROUP_SYSTEM_PROMPT,
+)
 
 
 def build_fallback_rig(
@@ -66,7 +71,7 @@ def request_rig_plan(
     skeleton_name: str,
     layers: list[LayerArtifact],
     canvas: CanvasInfo,
-    prompt: str,
+    prompt_context: PromptContext,
     settings: LLMSettings | None = None,
 ) -> RigPlan:
     load_dotenv()
@@ -89,7 +94,7 @@ def request_rig_plan(
             "content": json.dumps(
                 {
                     "task": "Generate a practical Spine setup-pose rig plan from the layer metadata and prompt.",
-                    "prompt": prompt,
+                    "prompt": prompt_context.rig_payload(),
                     "skeleton_name": skeleton_name,
                     "canvas": {
                         "width": canvas.width,
@@ -146,7 +151,7 @@ def request_rig_plan(
 
 
 def request_setup_group_choice(
-    prompt: str,
+    prompt_context: PromptContext,
     groups: list[Any],
     settings: LLMSettings | None = None,
 ) -> str | None:
@@ -167,7 +172,7 @@ def request_setup_group_choice(
             "role": "user",
             "content": json.dumps(
                 {
-                    "prompt": prompt,
+                    "prompt": prompt_context.setup_group_payload(),
                     "groups": group_summaries(groups),
                     "constraints": [
                         "Do not invent group ids.",
@@ -196,7 +201,7 @@ def request_setup_group_choice(
 
 
 def request_layer_visibility_plan(
-    prompt: str,
+    prompt_context: PromptContext,
     layers: list[LayerArtifact],
     settings: LLMSettings | None = None,
 ) -> set[str]:
@@ -223,7 +228,7 @@ def request_layer_visibility_plan(
             "role": "user",
             "content": json.dumps(
                 {
-                    "prompt": prompt,
+                    "prompt": prompt_context.visibility_payload(),
                     "active_layers": active_layer_summaries,
                     "geometry_hints": layer_overlap_hint_summaries(overlap_hints, layers),
                     "validation": [

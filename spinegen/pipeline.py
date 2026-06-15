@@ -17,7 +17,7 @@ from spinegen.llm import build_fallback_rig, request_layer_visibility_plan, requ
 from spinegen.models import ConversionResult
 from spinegen.naming import slugify
 from spinegen.preview import iframe_for_preview, write_preview_html
-from spinegen.prompts import compose_effective_prompt
+from spinegen.prompts import build_prompt_context
 from spinegen.psd_ingest import export_psd_layers, write_ir
 from spinegen.spine_json import compile_spine_json
 from spinegen.validate import validate_spine_bundle
@@ -36,7 +36,7 @@ def run_conversion(
     atlas_width: int,
     stage_logger: StageLogger | None = None,
 ) -> ConversionResult:
-    effective_prompt = compose_effective_prompt(prompt)
+    prompt_context = build_prompt_context(prompt)
     messages: list[str] = []
     _stage(messages, stage_logger, "检查输入文件...")
     if psd_path.suffix.lower() not in {".psd", ".psb"}:
@@ -53,14 +53,19 @@ def run_conversion(
         raise ValueError("没有找到可导出的可见像素图层。")
 
     settings = llm_settings or LLMSettings.from_env()
-    selection = select_setup_layers(layers, canvas, effective_prompt)
+    selection = select_setup_layers(layers, canvas, prompt_context.user_prompt)
     for message in selection.messages:
         _stage(messages, stage_logger, message)
     if use_llm and selection.has_alternatives:
         try:
             _stage(messages, stage_logger, "调用 LLM 选择 active pose/variant group...")
-            preferred_group_id = request_setup_group_choice(effective_prompt, selection.alternative_groups, settings=settings)
-            selection = select_setup_layers(layers, canvas, effective_prompt, preferred_group_id=preferred_group_id)
+            preferred_group_id = request_setup_group_choice(prompt_context, selection.alternative_groups, settings=settings)
+            selection = select_setup_layers(
+                layers,
+                canvas,
+                prompt_context.user_prompt,
+                preferred_group_id=preferred_group_id,
+            )
             if preferred_group_id and selection.selected_group_id == preferred_group_id:
                 _stage(messages, stage_logger, f"LLM 选择 active group：{preferred_group_id}。")
             elif preferred_group_id:
@@ -74,7 +79,7 @@ def run_conversion(
     if use_llm:
         try:
             _stage(messages, stage_logger, "调用 LLM 生成 active group 图层可见性计划...")
-            llm_hidden_ids = request_layer_visibility_plan(effective_prompt, layers, settings=settings)
+            llm_hidden_ids = request_layer_visibility_plan(prompt_context, layers, settings=settings)
             layer_filter = resolve_redundant_layers(layers, hidden_layer_ids=llm_hidden_ids)
             if llm_hidden_ids:
                 _stage(messages, stage_logger, f"LLM 建议隐藏 {len(llm_hidden_ids)} 个图层，已校验并应用。")
@@ -110,7 +115,7 @@ def run_conversion(
                 skeleton_name=skeleton_name,
                 layers=layers,
                 canvas=canvas,
-                prompt=effective_prompt,
+                prompt_context=prompt_context,
                 settings=settings,
             )
             _stage(
@@ -133,7 +138,7 @@ def run_conversion(
 
     if rig.source != "llm":
         _stage(messages, stage_logger, "fallback 模式根据 prompt 补齐基础动作动画...")
-        rig = ensure_prompted_animations(rig, effective_prompt)
+        rig = ensure_prompted_animations(rig, prompt_context.user_prompt)
 
     _stage(messages, stage_logger, "写入 RigPlan JSON...")
     rig_path = output_dir / f"{skeleton_name}.rigplan.json"
