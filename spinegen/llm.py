@@ -27,46 +27,6 @@ from spinegen.prompts import (
 )
 
 
-def build_fallback_rig(
-    skeleton_name: str,
-    layers: list[LayerArtifact],
-    canvas: CanvasInfo,
-    notes: list[str] | None = None,
-) -> RigPlan:
-    slots: list[dict[str, Any]] = []
-    bones: list[dict[str, Any]] = [{"name": "root", "parent": None}]
-    used_bones = {"root"}
-
-    for layer in _bottom_to_top(layers):
-        bone_name = unique_name(slugify(layer.asset_name, fallback=layer.id), used_bones)
-        bones.append(
-            {
-                "name": bone_name,
-                "parent": "root",
-                "pivot_layer_id": layer.id,
-                "x": round(layer.spine_x(canvas), 3),
-                "y": round(layer.spine_y(canvas), 3),
-            }
-        )
-        slots.append(
-            {
-                "name": layer.asset_name,
-                "bone": bone_name,
-                "layer_id": layer.id,
-                "attachment": layer.asset_name,
-            }
-        )
-
-    return RigPlan(
-        skeleton_name=skeleton_name,
-        bones=bones,
-        slots=slots,
-        animations=[_default_idle_animation()],
-        notes=notes or ["Fallback rig generated without LLM."],
-        source="fallback",
-    )
-
-
 def request_rig_plan(
     skeleton_name: str,
     layers: list[LayerArtifact],
@@ -103,9 +63,12 @@ def request_rig_plan(
                     },
                     "layers_bottom_to_top": layer_summary,
                     "constraints": [
+                        "Return at least one bone. Include root, body, or other semantic bones when useful.",
+                        "Create one slot for every layer in layers_bottom_to_top.",
                         "Every slot must reference an existing layer_id.",
                         "Every slot bone must exist in bones.",
-                        "If unsure, bind the layer to root or a simple part bone.",
+                        "If unsure, bind the layer to root or a simple semantic part bone.",
+                        "Return at least one animation with non-empty bone_timelines.",
                         "Use only ASCII names in bones, slots, and animations.",
                         "Do not include comments, markdown, or explanatory text outside the JSON object.",
                     ],
@@ -297,6 +260,9 @@ def _sanitize_rig_plan(
             pivot_layer_id = None
         bones.append({"name": name, "parent": parent_name, "pivot_layer_id": pivot_layer_id})
 
+    if not bones:
+        raise ValueError("LLM RigPlan 没有返回可用骨骼。")
+
     if "root" not in used_bones:
         bones.insert(0, {"name": "root", "parent": None, "pivot_layer_id": None})
         used_bones.add("root")
@@ -334,25 +300,19 @@ def _sanitize_rig_plan(
         )
         covered_layers.add(layer.id)
 
-    for layer in _bottom_to_top(layers):
-        if layer.id in covered_layers:
-            continue
-        slot_name = unique_name(layer.asset_name, used_slots)
-        slots.append(
-            {
-                "name": slot_name,
-                "bone": "root",
-                "layer_id": layer.id,
-                "attachment": layer.asset_name,
-            }
-        )
+    if not slots:
+        raise ValueError("LLM RigPlan 没有返回可用 slots。")
+    missing_layer_ids = [layer.id for layer in layers if layer.id not in covered_layers]
+    if missing_layer_ids:
+        joined = ", ".join(missing_layer_ids[:8])
+        raise ValueError(f"LLM RigPlan 缺少 active layer 的 slot：{joined}")
 
     layer_order = {layer.id: index for index, layer in enumerate(_bottom_to_top(layers))}
     slots.sort(key=lambda slot: layer_order.get(str(slot.get("layer_id")), len(layer_order)))
 
     animations = _sanitize_animations(raw.get("animations"), known_bones)
     if not animations:
-        animations = [_default_idle_animation()]
+        raise ValueError("LLM RigPlan 没有返回可用动画。")
 
     notes = raw.get("notes") if isinstance(raw.get("notes"), list) else []
     text_notes = [str(note) for note in notes[:10]]
@@ -408,7 +368,8 @@ def _sanitize_animations(raw_animations: Any, known_bones: set[str]) -> list[dic
                 timeline = _sanitize_timeline(raw_timeline, known_bones, duration)
                 if timeline:
                     timelines.append(timeline)
-        animations.append({"name": name, "duration": duration, "bone_timelines": timelines})
+        if timelines:
+            animations.append({"name": name, "duration": duration, "bone_timelines": timelines})
     return animations
 
 
@@ -450,23 +411,6 @@ def _sanitize_timeline(raw: Any, known_bones: set[str], duration: float) -> dict
         if frames:
             timeline[key] = sorted(frames, key=lambda value: value["time"])
     return timeline if len(timeline) > 1 else None
-
-
-def _default_idle_animation() -> dict[str, Any]:
-    return {
-        "name": "idle",
-        "duration": 1.0,
-        "bone_timelines": [
-            {
-                "bone": "root",
-                "translate": [
-                    {"time": 0.0, "x": 0.0, "y": 0.0},
-                    {"time": 0.5, "x": 0.0, "y": 2.0},
-                    {"time": 1.0, "x": 0.0, "y": 0.0},
-                ],
-            }
-        ],
-    }
 
 
 def _layer_prompt_record(layer: LayerArtifact, canvas: CanvasInfo) -> dict[str, Any]:

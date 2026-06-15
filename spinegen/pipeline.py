@@ -8,12 +8,11 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
-from spinegen.animations import ensure_prompted_animations
 from spinegen.atlas import pack_atlas
 from spinegen.config import LLMSettings
 from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
-from spinegen.llm import build_fallback_rig, request_layer_visibility_plan, request_rig_plan, request_setup_group_choice
+from spinegen.llm import request_layer_visibility_plan, request_rig_plan, request_setup_group_choice
 from spinegen.models import ConversionResult
 from spinegen.naming import slugify
 from spinegen.preview import iframe_for_preview, write_preview_html
@@ -32,7 +31,6 @@ def run_conversion(
     psd_path: Path,
     prompt: str,
     llm_settings: LLMSettings | None,
-    use_llm: bool,
     atlas_width: int,
     stage_logger: StageLogger | None = None,
 ) -> ConversionResult:
@@ -56,35 +54,29 @@ def run_conversion(
     selection = select_setup_layers(layers, canvas, prompt_context.user_prompt)
     for message in selection.messages:
         _stage(messages, stage_logger, message)
-    if use_llm and selection.has_alternatives:
-        try:
-            _stage(messages, stage_logger, "调用 LLM 选择 active pose/variant group...")
-            preferred_group_id = request_setup_group_choice(prompt_context, selection.alternative_groups, settings=settings)
-            selection = select_setup_layers(
-                layers,
-                canvas,
-                prompt_context.user_prompt,
-                preferred_group_id=preferred_group_id,
-            )
-            if preferred_group_id and selection.selected_group_id == preferred_group_id:
-                _stage(messages, stage_logger, f"LLM 选择 active group：{preferred_group_id}。")
-            elif preferred_group_id:
-                _stage(messages, stage_logger, f"LLM 返回的 group 不可用，已使用保守选择：{selection.selected_group_id}。")
-            for message in selection.messages:
-                _stage(messages, stage_logger, message)
-        except Exception as exc:  # noqa: BLE001 - conversion can continue with the conservative group choice.
-            _stage(messages, stage_logger, f"LLM active group 选择失败，使用保守选择：{exc}")
+    if selection.has_alternatives:
+        _stage(messages, stage_logger, "调用 LLM 选择 active pose/variant group...")
+        preferred_group_id = request_setup_group_choice(prompt_context, selection.alternative_groups, settings=settings)
+        if not preferred_group_id:
+            raise ValueError("LLM 没有返回可用的 active group。")
+        selection = select_setup_layers(
+            layers,
+            canvas,
+            prompt_context.user_prompt,
+            preferred_group_id=preferred_group_id,
+        )
+        if selection.selected_group_id != preferred_group_id:
+            raise ValueError(f"LLM 返回的 active group 不在候选列表中：{preferred_group_id}")
+        _stage(messages, stage_logger, f"LLM 选择 active group：{preferred_group_id}。")
+        for message in selection.messages:
+            _stage(messages, stage_logger, message)
     layers = selection.layers
     layer_filter = resolve_redundant_layers(layers)
-    if use_llm:
-        try:
-            _stage(messages, stage_logger, "调用 LLM 生成 active group 图层可见性计划...")
-            llm_hidden_ids = request_layer_visibility_plan(prompt_context, layers, settings=settings)
-            layer_filter = resolve_redundant_layers(layers, hidden_layer_ids=llm_hidden_ids)
-            if llm_hidden_ids:
-                _stage(messages, stage_logger, f"LLM 建议隐藏 {len(llm_hidden_ids)} 个图层，已校验并应用。")
-        except Exception as exc:  # noqa: BLE001 - conversion can continue with all active layers.
-            _stage(messages, stage_logger, f"LLM 图层可见性计划失败，保留 active group 图层：{exc}")
+    _stage(messages, stage_logger, "调用 LLM 生成 active group 图层可见性计划...")
+    llm_hidden_ids = request_layer_visibility_plan(prompt_context, layers, settings=settings)
+    layer_filter = resolve_redundant_layers(layers, hidden_layer_ids=llm_hidden_ids)
+    if llm_hidden_ids:
+        _stage(messages, stage_logger, f"LLM 建议隐藏 {len(llm_hidden_ids)} 个图层，已校验并应用。")
     for message in layer_filter.messages:
         _stage(messages, stage_logger, message)
     layers = layer_filter.layers
@@ -104,41 +96,23 @@ def run_conversion(
     atlas = pack_atlas(layers, output_dir, skeleton_name, max_width=atlas_width)
     _stage(messages, stage_logger, f"已生成 atlas：{atlas.atlas_path.name} ({atlas.width}x{atlas.height})。")
 
-    if use_llm:
-        try:
-            _stage(
-                messages,
-                stage_logger,
-                f"调用 LLM 生成 RigPlan：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}...",
-            )
-            rig = request_rig_plan(
-                skeleton_name=skeleton_name,
-                layers=layers,
-                canvas=canvas,
-                prompt_context=prompt_context,
-                settings=settings,
-            )
-            _stage(
-                messages,
-                stage_logger,
-                f"LLM RigPlan 已生成：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}。",
-            )
-        except Exception as exc:  # noqa: BLE001 - conversion should still produce fallback files.
-            rig = build_fallback_rig(
-                skeleton_name=skeleton_name,
-                layers=layers,
-                canvas=canvas,
-                notes=[f"LLM RigPlan failed, used fallback: {exc}"],
-            )
-            _stage(messages, stage_logger, f"LLM RigPlan 失败，已使用基础 fallback：{exc}")
-    else:
-        _stage(messages, stage_logger, "跳过 LLM，生成基础 fallback RigPlan...")
-        rig = build_fallback_rig(skeleton_name=skeleton_name, layers=layers, canvas=canvas)
-        _stage(messages, stage_logger, "已跳过 LLM，使用基础 fallback RigPlan。")
-
-    if rig.source != "llm":
-        _stage(messages, stage_logger, "fallback 模式根据 prompt 补齐基础动作动画...")
-        rig = ensure_prompted_animations(rig, prompt_context.user_prompt)
+    _stage(
+        messages,
+        stage_logger,
+        f"调用 LLM 生成 RigPlan：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}...",
+    )
+    rig = request_rig_plan(
+        skeleton_name=skeleton_name,
+        layers=layers,
+        canvas=canvas,
+        prompt_context=prompt_context,
+        settings=settings,
+    )
+    _stage(
+        messages,
+        stage_logger,
+        f"LLM RigPlan 已生成：max_tokens={settings.max_tokens}, thinking={settings.enable_thinking}。",
+    )
 
     _stage(messages, stage_logger, "写入 RigPlan JSON...")
     rig_path = output_dir / f"{skeleton_name}.rigplan.json"

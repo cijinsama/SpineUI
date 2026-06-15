@@ -43,7 +43,6 @@ def _launch_kwargs() -> dict[str, object]:
 def convert_psd(
     psd_file: str | None,
     prompt: str,
-    use_llm: bool,
     atlas_width: int,
     max_tokens: int,
     temperature: float,
@@ -83,7 +82,6 @@ def convert_psd(
                 psd_path=Path(psd_file),
                 prompt=prompt or "",
                 llm_settings=llm_settings,
-                use_llm=use_llm,
                 atlas_width=int(atlas_width),
                 stage_logger=stage_logger,
             )
@@ -145,7 +143,6 @@ with gr.Blocks(title="PSD to Spine") as demo:
                     choices=[512, 1024, 2048, 4096],
                     scale=1,
                 )
-            use_llm_input = gr.Checkbox(label="Use LLM planning", value=True)
             with gr.Accordion("LLM parameters", open=False):
                 max_tokens_input = gr.Slider(
                     label="max_tokens",
@@ -197,7 +194,6 @@ with gr.Blocks(title="PSD to Spine") as demo:
         inputs=[
             psd_input,
             prompt_input,
-            use_llm_input,
             atlas_width_input,
             max_tokens_input,
             temperature_input,

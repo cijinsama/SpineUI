@@ -1,12 +1,12 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from spinegen.atlas import pack_atlas
-from spinegen.animations import ensure_prompted_animations
 from spinegen.layer_filter import resolve_redundant_layers
 from spinegen.layer_selection import select_setup_layers
-from spinegen.llm import build_fallback_rig
+from spinegen.llm import _sanitize_rig_plan
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.prompts import DEFAULT_QUALITY_PROMPT, build_prompt_context
 from spinegen.spine_json import compile_spine_json
@@ -54,7 +54,7 @@ def test_atlas_and_spine_json_compile(tmp_path: Path) -> None:
     ]
 
     atlas = pack_atlas(layers, tmp_path, "hero", max_width=256)
-    rig = build_fallback_rig("hero", layers, canvas)
+    rig = _rig_for_layers("hero", layers)
     spine_json = compile_spine_json("hero", canvas, layers, rig)
 
     assert atlas.image_path.exists()
@@ -112,33 +112,6 @@ def test_spine_42_rotate_timelines_use_value(tmp_path: Path) -> None:
     assert "angle" not in rotate_frame
 
 
-def test_attack_prompt_adds_visible_motion_to_fallback(tmp_path: Path) -> None:
-    image_path = tmp_path / "body.png"
-    Image.new("RGBA", (40, 60), (180, 60, 60, 255)).save(image_path)
-    canvas = CanvasInfo(width=128, height=128, origin_x=64, origin_y=96)
-    layer = LayerArtifact(
-        id="layer_001",
-        name="body",
-        source_path="body",
-        asset_name="body",
-        image_path=image_path,
-        bbox=(44, 44, 84, 104),
-        width=40,
-        height=60,
-        opacity=1,
-        blend_mode="normal",
-        draw_order=0,
-        tags={},
-    )
-    rig = build_fallback_rig("hero", [layer], canvas)
-
-    ensure_prompted_animations(rig, "这是一个 Q 版角色，生成 attack 的基础骨骼和动画。")
-    attack = next(animation for animation in rig.animations if animation["name"] == "attack")
-    root = next(timeline for timeline in attack["bone_timelines"] if timeline["bone"] == "root")
-
-    assert root["translate"][2]["x"] == 42.0
-
-
 def test_layer_selection_keeps_one_matching_pose_group(tmp_path: Path) -> None:
     image_path = tmp_path / "part.png"
     Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
@@ -166,7 +139,7 @@ def test_slots_preserve_psd_draw_order(tmp_path: Path) -> None:
         _layer("face", "face", image_path, 0, (20, 20, 80, 80)),
         _layer("eye", "eye", image_path, 1, (35, 35, 65, 45)),
     ]
-    rig = build_fallback_rig("hero", layers, canvas)
+    rig = _rig_for_layers("hero", layers)
     spine_json = compile_spine_json("hero", canvas, layers, rig)
 
     assert [slot["attachment"] for slot in spine_json["slots"]] == ["face", "eye"]
@@ -216,6 +189,22 @@ def test_old_visible_default_prompt_is_not_treated_as_user_request() -> None:
     assert context.user_prompt == ""
 
 
+def test_llm_rig_plan_requires_animation_timelines(tmp_path: Path) -> None:
+    image_path = tmp_path / "body.png"
+    Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
+    canvas = CanvasInfo(width=100, height=100, origin_x=50, origin_y=50)
+    layer = _layer("body", "body", image_path, 0, (20, 20, 80, 80))
+    raw = {
+        "skeleton_name": "hero",
+        "bones": [{"name": "root", "parent": None}],
+        "slots": [{"name": "body", "bone": "root", "layer_id": "layer_0", "attachment": "body"}],
+        "animations": [{"name": "idle", "duration": 1.0, "bone_timelines": []}],
+    }
+
+    with pytest.raises(ValueError, match="没有返回可用动画"):
+        _sanitize_rig_plan(raw, "hero", [layer], canvas)
+
+
 def _layer(
     source_path: str,
     asset_name: str,
@@ -236,4 +225,38 @@ def _layer(
         blend_mode="normal",
         draw_order=draw_order,
         tags={},
+    )
+
+
+def _rig_for_layers(skeleton_name: str, layers: list[LayerArtifact]) -> RigPlan:
+    bones = [{"name": "root", "parent": None}]
+    slots = [
+        {
+            "name": layer.asset_name,
+            "bone": "root",
+            "layer_id": layer.id,
+            "attachment": layer.asset_name,
+        }
+        for layer in layers
+    ]
+    return RigPlan(
+        skeleton_name=skeleton_name,
+        bones=bones,
+        slots=slots,
+        animations=[
+            {
+                "name": "idle",
+                "duration": 1.0,
+                "bone_timelines": [
+                    {
+                        "bone": "root",
+                        "translate": [
+                            {"time": 0.0, "x": 0.0, "y": 0.0},
+                            {"time": 1.0, "x": 0.0, "y": 0.0},
+                        ],
+                    }
+                ],
+            }
+        ],
+        source="llm",
     )

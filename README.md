@@ -1,6 +1,6 @@
 # PSD to Spine Gradio MVP
 
-This app converts a PSD/PSB into layer PNGs, a Spine-compatible `.atlas`, a setup-pose Spine JSON file, and a downloadable zip. An optional LLM step uses the NRP OpenAI-compatible API to create a constrained rig plan from the PSD layer metadata and the user prompt.
+This app converts a PSD/PSB into layer PNGs, a Spine-compatible `.atlas`, a setup-pose Spine JSON file, and a downloadable zip. The LLM backend is required: it selects active PSD variants when needed, plans layer visibility, and creates the constrained rig/animation plan from PSD metadata and the user prompt.
 
 ## Setup
 
@@ -54,7 +54,7 @@ python -m spinegen.cli character.psd \
   --max-tokens 16000
 ```
 
-Use `--no-llm` for an offline fallback setup-pose JSON output.
+There is no non-LLM mode. If the LLM backend is unavailable or returns an invalid plan, generation fails with an error.
 
 ## PSD Layer Tags
 
@@ -68,7 +68,7 @@ The compiler never lets the LLM invent coordinates or atlas entries. It only acc
 
 ## Pose Groups
 
-If a PSD contains multiple top-level groups that look like mutually exclusive full-character poses or variants, the app detects candidate groups before atlas packing. When LLM mode is enabled, the LLM chooses among those detected groups from the user prompt; code only validates the returned group id before using it. If the LLM is disabled or unavailable, the app uses a conservative fallback group choice.
+If a PSD contains multiple top-level groups that look like mutually exclusive full-character poses or variants, the app detects candidate groups before atlas packing. The LLM chooses among those detected groups from the user prompt; code only validates the returned group id before using it. If the LLM does not return a valid group, generation fails.
 
 This prevents multiple complete poses from being displayed at the same time while avoiding hardcoded project-specific group names.
 
@@ -77,6 +77,8 @@ This prevents multiple complete poses from being displayed at the same time whil
 After the active group is selected, the app asks the configured LLM backend to produce a visibility plan for the active layers. The model can hide mutually exclusive layers, composite/component duplicates, optional equipment states, and expression variants according to the user prompt. The compiler only applies layer ids that exist in the active layer set, and it rejects plans that would hide every layer.
 
 The Gradio `User prompt` field and the CLI `--prompt` flag are only for the user's request, for example `这是一个 Q 版角色，生成 attack 的基础骨骼和动画。`. The hidden default quality prompt is added in backend code and is not shown in the app.
+
+For a simple PSD with clean, non-ambiguous layers, the user prompt can be mostly animation intent, such as `生成 attack 动画` or `生成轻微 idle 呼吸动画`. Add visibility or state instructions only when the PSD has ambiguous variants, duplicate equipment, expressions, or pose groups.
 
 Prompt routing is split by LLM task:
 

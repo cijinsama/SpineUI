@@ -73,7 +73,7 @@ class RigPlan:
     slots: list[dict[str, Any]] = field(default_factory=list)
     animations: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    source: str = "fallback"
+    source: str = "llm"
 
     def to_dict(self) -> dict[str, Any]:
         return {
