@@ -151,7 +151,7 @@ def _compile_animations(rig_plan: RigPlan) -> dict[str, Any]:
                 compiled_timeline["rotate"] = [
                     {
                         "time": float(frame.get("time", 0.0)),
-                        "angle": float(frame.get("angle", 0.0)),
+                        "value": float(frame.get("angle", 0.0)),
                     }
                     for frame in timeline["rotate"]
                     if isinstance(frame, dict)
@@ -185,4 +185,3 @@ def _compile_animations(rig_plan: RigPlan) -> dict[str, Any]:
 def _opacity_color(opacity: float) -> str:
     alpha = max(0, min(255, round(opacity * 255)))
     return f"ffffff{alpha:02x}"
-

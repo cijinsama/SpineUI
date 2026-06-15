@@ -8,6 +8,7 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+from spinegen.animations import ensure_prompted_animations
 from spinegen.atlas import pack_atlas
 from spinegen.config import LLMSettings
 from spinegen.llm import build_fallback_rig, request_rig_plan
@@ -88,6 +89,9 @@ def run_conversion(
         _stage(messages, stage_logger, "跳过 LLM，生成规则 RigPlan...")
         rig = build_fallback_rig(skeleton_name=skeleton_name, layers=layers, canvas=canvas)
         _stage(messages, stage_logger, "已跳过 LLM，使用规则 RigPlan。")
+
+    _stage(messages, stage_logger, "根据 prompt 补齐动作动画...")
+    rig = ensure_prompted_animations(rig, prompt)
 
     _stage(messages, stage_logger, "写入 RigPlan JSON...")
     rig_path = output_dir / f"{skeleton_name}.rigplan.json"

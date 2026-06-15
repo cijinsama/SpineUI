@@ -31,6 +31,7 @@ def write_preview_html(
         "atlasUrl": atlas_path.name,
         "rawDataURIs": raw_data,
         "showControls": True,
+        "loop": True,
         "alpha": True,
         "backgroundColor": "#f7f7f2",
         "viewport": {"debugRender": False},
@@ -104,4 +105,3 @@ def _preview_document(skeleton_name: str, config: dict[str, object]) -> str:
 def _data_uri(mime_type: str, data: bytes) -> str:
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
-
