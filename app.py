@@ -14,6 +14,13 @@ from spinegen.pipeline import run_conversion
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def convert_psd(
     psd_file: str | None,
     prompt: str,
@@ -180,4 +187,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name=os.getenv("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.getenv("GRADIO_SERVER_PORT", "7860")),
+        share=_env_bool("GRADIO_SHARE", True),
     )
