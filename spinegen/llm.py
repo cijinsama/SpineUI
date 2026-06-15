@@ -11,6 +11,7 @@ from openai import OpenAI
 from openai import OpenAIError
 
 from spinegen.config import DEFAULT_BASE_URL, LLMSettings
+from spinegen.layer_selection import group_summaries
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.naming import slugify, unique_name
 
@@ -142,6 +143,59 @@ def request_rig_plan(
     content = completion.choices[0].message.content or "{}"
     parsed = _parse_json_object(content)
     return _sanitize_rig_plan(parsed, skeleton_name, layers, canvas)
+
+
+def request_setup_group_choice(
+    prompt: str,
+    groups: list[Any],
+    settings: LLMSettings | None = None,
+) -> str | None:
+    load_dotenv()
+    settings = settings or LLMSettings.from_env()
+    api_key = os.getenv("NRP_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("缺少 NRP_API_KEY 或 OPENAI_API_KEY。请在 .env 中配置。")
+
+    base_url = os.getenv("NRP_BASE_URL", DEFAULT_BASE_URL)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=settings.timeout_seconds)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You select one active setup group from PSD top-level groups. "
+                "The groups may be mutually exclusive pose or variant groups. "
+                "Return only JSON: {\"selected_group_id\": string|null, \"reason\": string}. "
+                "Use only ids from the provided group list. If the groups are not alternatives, return null."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "prompt": prompt,
+                    "groups": group_summaries(groups),
+                    "rules": [
+                        "Do not invent group ids.",
+                        "Prefer the group whose label or layer parts match the requested action or pose.",
+                        "If the prompt does not indicate a pose, choose the most neutral setup group.",
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    kwargs: dict[str, Any] = {
+        "model": settings.model,
+        "messages": messages,
+        "max_tokens": min(settings.max_tokens, 2048),
+        "temperature": 0.0,
+        "top_p": settings.top_p,
+        "response_format": {"type": "json_object"},
+    }
+    completion = _create_chat_completion(client, kwargs)
+    parsed = _parse_json_object(completion.choices[0].message.content or "{}")
+    selected = parsed.get("selected_group_id")
+    return str(selected) if selected else None
 
 
 def _create_chat_completion(client: OpenAI, kwargs: dict[str, Any]) -> Any:
@@ -366,7 +420,7 @@ def _layer_prompt_record(layer: LayerArtifact, canvas: CanvasInfo) -> dict[str, 
 
 
 def _bottom_to_top(layers: list[LayerArtifact]) -> list[LayerArtifact]:
-    return list(reversed(layers))
+    return sorted(layers, key=lambda layer: layer.draw_order)
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

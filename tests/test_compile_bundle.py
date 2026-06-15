@@ -4,6 +4,7 @@ from PIL import Image
 
 from spinegen.atlas import pack_atlas
 from spinegen.animations import ensure_prompted_animations
+from spinegen.layer_selection import select_setup_layers
 from spinegen.llm import build_fallback_rig
 from spinegen.models import CanvasInfo, LayerArtifact, RigPlan
 from spinegen.spine_json import compile_spine_json
@@ -134,3 +135,59 @@ def test_attack_prompt_adds_visible_motion_to_fallback(tmp_path: Path) -> None:
     root = next(timeline for timeline in attack["bone_timelines"] if timeline["bone"] == "root")
 
     assert root["translate"][2]["x"] == 42.0
+
+
+def test_layer_selection_keeps_one_matching_pose_group(tmp_path: Path) -> None:
+    image_path = tmp_path / "part.png"
+    Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
+    canvas = CanvasInfo(width=200, height=200, origin_x=100, origin_y=100)
+    layers = [
+        _layer("standing/head", "standing_head", image_path, 0, (70, 20, 110, 60)),
+        _layer("standing/body", "standing_body", image_path, 1, (60, 60, 120, 140)),
+        _layer("standing/weapon", "standing_weapon", image_path, 2, (115, 60, 155, 130)),
+        _layer("strike/head_strike", "strike_head", image_path, 3, (76, 22, 116, 62)),
+        _layer("strike/body_strike", "strike_body", image_path, 4, (66, 62, 126, 142)),
+        _layer("strike/weapon_strike", "strike_weapon", image_path, 5, (118, 65, 170, 128)),
+    ]
+
+    selection = select_setup_layers(layers, canvas, "generate strike animation")
+
+    assert selection.selected_group_id == "strike"
+    assert [layer.asset_name for layer in selection.layers] == ["strike_head", "strike_body", "strike_weapon"]
+
+
+def test_slots_preserve_psd_draw_order(tmp_path: Path) -> None:
+    image_path = tmp_path / "part.png"
+    Image.new("RGBA", (20, 20), (180, 60, 60, 255)).save(image_path)
+    canvas = CanvasInfo(width=100, height=100, origin_x=50, origin_y=50)
+    layers = [
+        _layer("face", "face", image_path, 0, (20, 20, 80, 80)),
+        _layer("eye", "eye", image_path, 1, (35, 35, 65, 45)),
+    ]
+    rig = build_fallback_rig("hero", layers, canvas)
+    spine_json = compile_spine_json("hero", canvas, layers, rig)
+
+    assert [slot["attachment"] for slot in spine_json["slots"]] == ["face", "eye"]
+
+
+def _layer(
+    source_path: str,
+    asset_name: str,
+    image_path: Path,
+    draw_order: int,
+    bbox: tuple[int, int, int, int],
+) -> LayerArtifact:
+    return LayerArtifact(
+        id=f"layer_{draw_order}",
+        name=source_path.split("/")[-1],
+        source_path=source_path,
+        asset_name=asset_name,
+        image_path=image_path,
+        bbox=bbox,
+        width=bbox[2] - bbox[0],
+        height=bbox[3] - bbox[1],
+        opacity=1,
+        blend_mode="normal",
+        draw_order=draw_order,
+        tags={},
+    )

@@ -65,3 +65,9 @@ Layer names can include lightweight tags:
 - `[bone]` / `[slot]`: kept in metadata for the LLM planner.
 
 The compiler never lets the LLM invent coordinates or atlas entries. It only accepts a constrained RigPlan that references existing `layer_id` values.
+
+## Pose Groups
+
+If a PSD contains multiple top-level groups that look like mutually exclusive full-character poses or variants, the app selects one active setup group before atlas packing. The selection is based on group structure, overlapping bounds, reusable part names, and prompt tokens. When LLM mode is enabled, the LLM can choose among the detected candidate groups, but code validates the returned group id before using it.
+
+This prevents multiple complete poses from being displayed at the same time while avoiding hardcoded project-specific group names.

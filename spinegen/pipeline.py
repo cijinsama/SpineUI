@@ -11,7 +11,8 @@ from pathlib import Path
 from spinegen.animations import ensure_prompted_animations
 from spinegen.atlas import pack_atlas
 from spinegen.config import LLMSettings
-from spinegen.llm import build_fallback_rig, request_rig_plan
+from spinegen.layer_selection import select_setup_layers
+from spinegen.llm import build_fallback_rig, request_rig_plan, request_setup_group_choice
 from spinegen.models import ConversionResult
 from spinegen.naming import slugify
 from spinegen.preview import iframe_for_preview, write_preview_html
@@ -48,6 +49,30 @@ def run_conversion(
     if not layers:
         raise ValueError("没有找到可导出的可见像素图层。")
 
+    settings = llm_settings or LLMSettings.from_env()
+    selection = select_setup_layers(layers, canvas, prompt)
+    for message in selection.messages:
+        _stage(messages, stage_logger, message)
+    if use_llm and selection.has_alternatives:
+        try:
+            _stage(messages, stage_logger, "调用 LLM 选择 active pose/variant group...")
+            preferred_group_id = request_setup_group_choice(prompt, selection.alternative_groups, settings=settings)
+            selection = select_setup_layers(layers, canvas, prompt, preferred_group_id=preferred_group_id)
+            if preferred_group_id and selection.selected_group_id == preferred_group_id:
+                _stage(messages, stage_logger, f"LLM 选择 active group：{preferred_group_id}。")
+            elif preferred_group_id:
+                _stage(messages, stage_logger, f"LLM 返回的 group 不可用，已使用规则选择：{selection.selected_group_id}。")
+            for message in selection.messages:
+                _stage(messages, stage_logger, message)
+        except Exception as exc:  # noqa: BLE001 - deterministic selection is good enough to continue.
+            _stage(messages, stage_logger, f"LLM active group 选择失败，使用规则选择：{exc}")
+    layers = selection.layers
+    ir["selection"] = {
+        "selected_group_id": selection.selected_group_id,
+        "alternative_group_ids": [group.id for group in selection.alternative_groups],
+        "exported_layer_count": len(layers),
+    }
+
     _stage(messages, stage_logger, "写入 IR 元数据...")
     ir_path = output_dir / f"{skeleton_name}.ir.json"
     write_ir(ir, ir_path)
@@ -59,7 +84,6 @@ def run_conversion(
 
     if use_llm:
         try:
-            settings = llm_settings or LLMSettings.from_env()
             _stage(
                 messages,
                 stage_logger,
